@@ -68,7 +68,7 @@ const WORKSPACE_NAME_SUFFIX = `$wsroot$`;
 /** Package locator key for usage inside maps */
 type LocatorKey = string;
 
-type WorkspaceTree = {workspaceLocator?: PhysicalPackageLocator, children: Map<Filename, WorkspaceTree>};
+type SoftLinkTree = {locator?: PhysicalPackageLocator, children: Map<Filename, SoftLinkTree>};
 
 /**
  * Returns path to archive, if package location is inside the archive.
@@ -158,7 +158,7 @@ const buildPackageTree = (pnp: PnpApi, options: NodeModulesTreeOptions): { packa
   let preserveSymlinksRequired = false;
 
   const hoistingLimits = new Map<LocatorKey, Set<string>>();
-  const workspaceDependenciesMap = new Map<LocatorKey, Set<PhysicalPackageLocator>>();
+  const softLinkDependenciesMap = new Map<LocatorKey, Set<PhysicalPackageLocator>>();
 
   const topPkg = pnp.getPackageInformation(pnp.topLevel);
   if (topPkg === null)
@@ -170,13 +170,13 @@ const buildPackageTree = (pnp: PnpApi, options: NodeModulesTreeOptions): { packa
 
   const topPkgPortableLocation = npath.toPortablePath(topPkg.packageLocation.slice(0, -1));
 
-  const workspaceTree: WorkspaceTree = {children: new Map()};
+  const softLinkTree: SoftLinkTree = {children: new Map()};
   const cwdSegments = topPkgPortableLocation.split(ppath.sep);
   for (const locator of pnpRoots) {
     const pkg = pnp.getPackageInformation(locator)!;
     const location = npath.toPortablePath(pkg.packageLocation.slice(0, -1));
     const segments = location.split(ppath.sep).slice(cwdSegments.length);
-    let node = workspaceTree;
+    let node = softLinkTree;
     for (const segment of segments) {
       let nextNode = node.children.get(segment as Filename);
       if (!nextNode) {
@@ -185,26 +185,26 @@ const buildPackageTree = (pnp: PnpApi, options: NodeModulesTreeOptions): { packa
       }
       node = nextNode;
     }
-    node.workspaceLocator = locator;
+    node.locator = locator;
   }
 
-  const addWorkspace = (node: WorkspaceTree, parentWorkspaceLocator: PhysicalPackageLocator) => {
-    if (node.workspaceLocator) {
-      const parentLocatorKey = stringifyLocator(parentWorkspaceLocator);
-      let dependencies = workspaceDependenciesMap.get(parentLocatorKey);
+  const addSoftLink = (node: SoftLinkTree, parentSoftLinkLocator: PhysicalPackageLocator) => {
+    if (node.locator) {
+      const parentLocatorKey = stringifyLocator(parentSoftLinkLocator);
+      let dependencies = softLinkDependenciesMap.get(parentLocatorKey);
       if (!dependencies) {
         dependencies = new Set();
-        workspaceDependenciesMap.set(parentLocatorKey, dependencies);
+        softLinkDependenciesMap.set(parentLocatorKey, dependencies);
       }
-      dependencies.add(node.workspaceLocator);
+      dependencies.add(node.locator);
     }
     for (const child of node.children.values()) {
-      addWorkspace(child, node.workspaceLocator || parentWorkspaceLocator);
+      addSoftLink(child, node.locator || parentSoftLinkLocator);
     }
   };
 
-  for (const child of workspaceTree.children.values())
-    addWorkspace(child, workspaceTree.workspaceLocator!);
+  for (const child of softLinkTree.children.values())
+    addSoftLink(child, softLinkTree.locator!);
 
   const packageTree: HoisterTree = {
     name: topLocator.name,
@@ -212,7 +212,7 @@ const buildPackageTree = (pnp: PnpApi, options: NodeModulesTreeOptions): { packa
     reference: topLocator.reference,
     peerNames: topPkg.packagePeers,
     dependencies: new Set<HoisterTree>(),
-    isWorkspace: true,
+    isSoftLink: topPkg.linkType === LinkType.SOFT,
   };
 
   const nodes = new Map<string, HoisterTree>();
@@ -244,7 +244,7 @@ const buildPackageTree = (pnp: PnpApi, options: NodeModulesTreeOptions): { packa
         reference: locator.reference,
         dependencies: new Set(),
         peerNames: pkg.packagePeers,
-        isWorkspace: pkg.linkType === LinkType.SOFT && locator.name.endsWith(WORKSPACE_NAME_SUFFIX),
+        isSoftLink: pkg.linkType === LinkType.SOFT && locator.name.endsWith(WORKSPACE_NAME_SUFFIX),
       };
 
       nodes.set(nodeKey, node);
@@ -287,7 +287,7 @@ const buildPackageTree = (pnp: PnpApi, options: NodeModulesTreeOptions): { packa
     }
 
     const locatorKey = stringifyLocator({name: locator.name.replace(WORKSPACE_NAME_SUFFIX, ``), reference: locator.reference});
-    const workspaceDependencies = workspaceDependenciesMap.get(locatorKey);
+    const workspaceDependencies = softLinkDependenciesMap.get(locatorKey);
     if (workspaceDependencies) {
       for (const workspaceLocator of workspaceDependencies) {
         allDependencies.set(`${workspaceLocator.name}${WORKSPACE_NAME_SUFFIX}`, workspaceLocator.reference);
